@@ -329,15 +329,17 @@ const globalCss = `
 `;
 
 const DEFAULT_PROFILE_PIC_URL = 'https://i.pravatar.cc/300';
+
+// Use environment variables for Firebase configuration
 const firebaseConfig = {
-    apiKey: "AIzaSyAC4h55aA0Zz--V5ejyndzR5WC_-9rAPio",
-    authDomain: "subscribe-bot-6f9b2.firebaseapp.com",
-    databaseURL: "https://subscribe-bot-6f9b2-default-rtdb.firebaseio.com",
-    projectId: "subscribe-bot-6f9b2",
-    storageBucket: "subscribe-bot-6f9b2.firebasestorage.app",
-    messagingSenderId: "141787931031",
-    appId: "1:141787931031:web:2108a3e930f5ce4fbc64d2",
-    measurementId: "G-HSDKCJB14Y"
+    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+    authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+    databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
+    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+    measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
 const app = initializeApp(firebaseConfig);
@@ -663,7 +665,7 @@ export default function App() {
             setPromotion(latestPromotion);
             setLoadingPromotions(false);
         } catch (error) {
-            console.error("প্রমোশন ব্যানার লোড করতে সমস্যা:", error);
+            console.error("প্রোমোশন ব্যানার লোড করতে সমস্যা:", error);
             setPromotion(null);
             setLoadingPromotions(false);
         }
@@ -819,7 +821,7 @@ export default function App() {
 
                     <div className={`mobile-slider-menu ${mobileMenuOpen ? 'active' : ''}`} role="menu" aria-label="মোবাইল স্লাইডার মেনু">
                         <div className="flex items-center space-x-3 p-4 border-b border-gray-200 mb-4">
-                            <img alt="স্লাইডার প্রোফাইল ছবি"
+                            <img alt="প্রোফাইল ছবি"
                                 className="w-16 h-16 rounded-full border-2 border-indigo-500 shadow-md header-profile-logo"
                                 loading="lazy"
                                 src={profilePicUrl}
@@ -863,7 +865,7 @@ export default function App() {
                             <div className="promotion-card">
                                 <a href={esc(promotion.redirectLink)} target="_blank" rel="noopener noreferrer" className="block w-full promotion-link">
                                     <div className="promotion-image-wrapper">
-                                        <img src={esc(promotion.imageUrl)} alt="প্রমোশন ব্যানার ছবি" />
+                                        <img src={esc(promotion.imageUrl)} alt="প্রোমোশন ব্যানার ছবি" />
                                     </div>
                                 </a>
                                 <div className="sponsored-tag">Sponsored</div>
