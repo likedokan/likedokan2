@@ -626,7 +626,7 @@ export default function App() {
 
         setLoadingOrders(true);
         try {
-            const snapshot = await get(ref(db, 'orders'));
+            const snapshot = await get(ref(db), 'orders');
             if (!snapshot.exists()) {
                 setOrders([]);
                 setLoadingOrders(false);
@@ -691,13 +691,13 @@ export default function App() {
                 loadAllNotificationsForUI(user);
                 loadOrders(user);
             } else {
+                // If user is not logged in, set state to false
                 setUserLoggedIn(false);
                 setWelcomeMessage("স্বাগতম, অতিথি");
                 setUserPoints(0);
                 setProfilePicUrl(DEFAULT_PROFILE_PIC_URL);
                 setOrders([]);
                 loadAllNotificationsForUI(null);
-                signInAnonymously(auth).catch(e => console.error("Error signing in anonymously:", e));
             }
         });
 
