@@ -1,352 +1,75 @@
-// This is the main page component for the Next.js application.
-// It combines the HTML structure and JavaScript logic into a single,
-// self-contained React component.
-
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState, createContext, useContext } from 'react';
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, get, child, query, limitToFirst, startAfter, endBefore, orderByKey } from "firebase/database";
-import { getAuth, onAuthStateChanged, signOut, signInAnonymously } from "firebase/auth";
-import Head from 'next/head';
+import { getDatabase, ref, onValue, get, child } from "firebase/database";
+import { getAuth, signInAnonymously, onAuthStateChanged, signOut } from "firebase/auth";
 
-// Define the global CSS for the application
-// This would be in a separate file like `globals.css` in a real Next.js project.
-// We are including it here for a single-file, self-contained example.
-const globalCss = `
-  body {
-      font-family: 'Hind Siliguri', sans-serif;
-      overflow-x: hidden;
-  }
+// IMPORTANT: These global variables are provided by the canvas environment.
+// DO NOT modify them.
+const __app_id = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const __firebase_config = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
+const __initial_auth_token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-  /* Skeleton Loading Styles for cards */
-  .skeleton-card {
-      background-color: #f3f4f6;
-      overflow: hidden;
-      position: relative;
-  }
+// Context for managing Firebase and User state
+const AppContext = createContext();
 
-  .shimmer {
-      width: 100%;
-      height: 100%;
-      background: linear-gradient(to right, #f3f4f6 8%, #e5e7eb 18%, #f3f4f6 33%); /* gray-100, gray-200 */
-      background-size: 800px 104px;
-      position: absolute;
-      top: 0;
-      left: -800px; /* Start off-screen to the left */
-      animation: shimmer 1.5s infinite linear;
-  }
+const AppProvider = ({ children }) => {
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+    const [user, setUser] = useState(null);
+    const [isAuthReady, setIsAuthReady] = useState(false);
 
-  @keyframes shimmer {
-      0% {
-          left: -800px;
-      }
-      100% {
-          left: 800px;
-      }
-  }
+    useEffect(() => {
+        try {
+            const firebaseConfig = JSON.parse(__firebase_config);
+            const app = initializeApp(firebaseConfig);
+            const realtimeDb = getDatabase(app);
+            const firebaseAuth = getAuth(app);
+            setDb(realtimeDb);
+            setAuth(firebaseAuth);
 
-  .skeleton-line {
-      background-color: #e5e7eb; /* gray-200 */
-      border-radius: 4px;
-      position: relative;
-      overflow: hidden;
-  }
+            const unsubscribe = onAuthStateChanged(firebaseAuth, async (currentUser) => {
+                if (currentUser) {
+                    setUser(currentUser);
+                } else {
+                    setUser(null);
+                }
+                setIsAuthReady(true);
+            });
 
-  .skeleton-circle {
-      background-color: #e5e7eb; /* gray-200 */
-      border-radius: 50%;
-      position: relative;
-      overflow: hidden;
-  }
+            const initAuth = async () => {
+                try {
+                    if (__initial_auth_token) {
+                        await signInWithCustomToken(firebaseAuth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(firebaseAuth);
+                    }
+                } catch (error) {
+                    console.error("Error with initial auth:", error);
+                    // Fallback to anonymous sign-in if custom token fails
+                    await signInAnonymously(firebaseAuth);
+                }
+            };
+            initAuth();
+            return () => unsubscribe();
+        } catch (error) {
+            console.error("Firebase initialization failed:", error);
+            setIsAuthReady(true);
+        }
+    }, []);
 
-  /* Styles for profile picture */
-  .header-profile-logo {
-      width: 48px; /* Matches logo size */
-      height: 48px; /* Matches logo size */
-      border-radius: 50%; /* Circular */
-      border: 2px solid #007bff; /* Example border */
-      object-fit: cover;
-  }
-
-  /* Styles for mobile slide-out menu */
-  .mobile-slider-menu {
-      position: fixed;
-      top: 0;
-      right: -280px; /* Hidden state */
-      width: 280px; /* Sidebar width */
-      height: 100%;
-      background-color: #ffffff; /* White background */
-      box-shadow: -8px 0 15px rgba(0, 0, 0, 0.15), inset 4px 0 8px rgba(255, 255, 255, 0.6);
-      z-index: 1000; /* Ensures it's on top of everything */
-      transition: right 0.35s cubic-bezier(0.4, 0, 0.2, 1); /* Smooth slide animation */
-      padding-top: 5rem; /* According to header height */
-      display: flex;
-      flex-direction: column;
-      border-top-left-radius: 1rem;
-      border-bottom-left-radius: 1rem;
-      backdrop-filter: saturate(180%) blur(12px);
-      -webkit-backdrop-filter: saturate(180%) blur(12px);
-  }
-
-  .mobile-slider-menu.active {
-      right: 0; /* Visible state */
-      box-shadow: -12px 0 25px rgba(0, 0, 0, 0.25), inset 4px 0 12px rgba(255, 255, 255, 0.7);
-  }
-
-  #sliderMenuContent {
-      flex-grow: 1; /* Allows menu items to fill empty space */
-      padding: 1.5rem 0;
-      display: flex;
-      flex-direction: column;
-      gap: 0.75rem;
-  }
-
-  #sliderMenuContent .menu-item {
-      display: flex;
-      align-items: center;
-      padding: 0.75rem 1.75rem;
-      color: #4338ca; /* indigo-700 */
-      font-weight: 600; /* font-semibold */
-      font-size: 1.125rem; /* text-lg */
-      border-radius: 0.75rem;
-      transition: background-color 0.3s ease, color 0.3s ease, transform 0.2s ease;
-      text-decoration: none; /* Removes underline */
-      box-shadow: 0 0 0 0 transparent;
-      user-select: none;
-      position: relative;
-      overflow: hidden;
-  }
-
-  #sliderMenuContent .menu-item::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 0;
-      height: 100%;
-      width: 4px;
-      background: #4338ca;
-      border-top-right-radius: 0.75rem;
-      border-bottom-right-radius: 0.75rem;
-      transform: scaleY(0);
-      transform-origin: center;
-      transition: transform 0.3s ease;
-      z-index: 1;
-  }
-
-  #sliderMenuContent .menu-item:hover::before,
-  #sliderMenuContent .menu-item:focus-visible::before {
-      transform: scaleY(1);
-  }
-
-  #sliderMenuContent .menu-item:hover {
-      background-color: #4338ca; /* indigo-700 */
-      color: #e0e7ff; /* indigo-100 */
-      transform: translateX(6px);
-      box-shadow: 0 8px 15px rgba(67, 56, 202, 0.3);
-      z-index: 10;
-      outline: none;
-  }
-
-  #sliderMenuContent .menu-item:focus-visible {
-      outline: 2px solid #4338ca;
-      outline-offset: 2px;
-  }
-
-  /* Overlay backdrop */
-  .slider-backdrop {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background-color: rgba(0, 0, 0, 0.45); /* Dark backdrop */
-      z-index: 999; /* Stays below the slider */
-      opacity: 0;
-      visibility: hidden;
-      transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), visibility 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-      backdrop-filter: blur(2px);
-      -webkit-backdrop-filter: blur(2px);
-  }
-
-  .slider-backdrop.active {
-      opacity: 1;
-      visibility: visible;
-  }
-
-  /* New styles for notification dropdown - caret */
-  #notificationDropdown::before {
-      content: '';
-      position: absolute;
-      top: -10px; /* Upwards from dropdown */
-      right: 18px; /* Aligned with notification button */
-      border-width: 0 10px 10px 10px; /* Creates a triangle */
-      border-color: transparent transparent white transparent; /* White triangle */
-      filter: drop-shadow(0 -2px 1px rgba(0,0,0,0.05)); /* Light shadow */
-      z-index: 51; /* Will be above dropdown */
-  }
-
-  #notificationDropdown::after {
-      content: '';
-      position: absolute;
-      top: -11px; /* 1px above for border */
-      right: 343px; /* Aligned with notification button */
-      border-width: 0 10px 10px 10px;
-      border-color: transparent transparent #e2e8f0 transparent; /* Border color */
-      z-index: 50; /* Above dropdown but below white triangle */
-  }
-
-  /* Adjust notification dropdown position for mobile screens (if needed) */
-  @media (max-width: 639px) { /* Below sm breakpoint */
-      #notificationDropdown::before,
-      #notificationDropdown::after {
-          right: 25px; /* Adjust position for small screens */
-      }
-  }
-
-  /* Additional styles for spinner */
-  .spinner {
-      border: 2px solid rgba(0, 0, 0, 0.1);
-      border-left-color: #4f46e5; /* indigo-600 */
-      border-radius: 50%;
-      width: 16px;
-      height: 16px;
-      animation: spin 1s linear infinite;
-  }
-
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-  }
-
-  /* New styles for login/logout buttons */
-  .btn-login {
-      background-color: #22c55e; /* green-500 */
-      color: white;
-  }
-
-  .btn-login:hover {
-      background-color: #16a34a; /* green-600 */
-  }
-
-  .btn-login:focus {
-      outline: none;
-      box-shadow: 0 0 0 2px #4ade80, 0 0 0 4px rgba(34, 197, 94, 0.5); /* green-300 ring */
-  }
-
-  .btn-logout {
-      background-color: #ef4444; /* red-500 */
-      color: white;
-  }
-
-  .btn-logout:hover {
-      background-color: #dc2626; /* red-600 */
-  }
-
-  .btn-logout:focus {
-      outline: none;
-      box-shadow: 0 0 0 2px #f87171, 0 0 0 4px rgba(239, 68, 68, 0.5); /* red-300 ring */
-  }
-
-  /* Promotion Card Specific Styles */
-  .promotion-card {
-      background-color: #ffffff;
-      border-radius: 0.75rem; /* rounded-xl */
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); /* shadow-md */
-      padding: 0; /* No padding */
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
-      position: relative; /* For positioning the sponsored tag */
-      overflow: hidden;
-      border: 1px solid #e2e8f0; /* border-gray-200 */
-  }
-
-  /* Container for the 16:9 image */
-  .promotion-image-wrapper {
-      position: relative;
-      width: 100%;
-      padding-bottom: 56.25%; /* 16:9 Aspect Ratio (9 / 16 * 100) */
-      overflow: hidden;
-      border-radius: 0.5rem; /* rounded-lg */
-  }
-
-  .promotion-image-wrapper img {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover; /* Ensures the image covers the area, cropping if necessary */
-      border-radius: 0.5rem; /* rounded-lg */
-  }
-
-  .promotion-card a.promotion-link {
-      display: block;
-      width: 100%;
-      height: 100%; /* Make the link take full height of the card */
-  }
-
-  /* New style for the sponsored tag */
-  .sponsored-tag {
-      position: absolute;
-      top: 0.6rem; /* 12px from top */
-      left: 0.6rem; /* 12px from left */
-      background-color: rgba(255, 255, 255, 0.2); /* Slightly transparent white */
-      color: #ffffff;
-      padding: 0.25rem 0.75rem; /* py-1 px-3 */
-      border-radius: 1rem; /* rounded-lg */
-      font-size: 0.3rem; /* text-xs */
-      font-weight: 600; /* font-semibold */
-      text-transform: uppercase;
-      letter-spacing: 0.05em; /* tracking-wider */
-      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); /* subtle shadow */
-      z-index: 10; /* Ensure it's above the image */
-      backdrop-filter: blur(4px); /* Frosted glass effect */
-      -webkit-backdrop-filter: blur(4px);
-      border: 1px solid rgba(255, 255, 255, 0.3); /* Light border */
-  }
-
-  /* Task-specific styles */
-  .task-card {
-      background-color: #ffffff;
-      border-radius: 0.75rem; /* rounded-xl */
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); /* shadow-md */
-      padding: 1.5rem;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
-      position: relative;
-      overflow: hidden;
-      border: 1px solid #e2e8f0; /* border-gray-200 */
-      transition: all 0.3s ease;
-  }
-
-  .task-card:hover {
-      transform: translateY(-0.25rem);
-      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-  }
-`;
-
-const DEFAULT_PROFILE_PIC_URL = 'https://i.pravatar.cc/300';
-
-// Use environment variables for Firebase configuration
-const firebaseConfig = {
-    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-    authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-    databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
-    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-    storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-    messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-    appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-    measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
+    return (
+        <AppContext.Provider value={{ db, auth, user, isAuthReady }}>
+            {children}
+        </AppContext.Provider>
+    );
 };
 
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
-const auth = getAuth(app);
+const useAppContext = () => {
+    return useContext(AppContext);
+};
 
-// Utility function for escaping HTML
+const DEFAULT_PROFILE_PIC_URL = 'https://placehold.co/300x300/a0aec0/ffffff?text=User';
+
 const esc = (str = "") => {
     return String(str)
         .replace(/&/g, "&amp;")
@@ -354,7 +77,6 @@ const esc = (str = "") => {
         .replace(/>/g, "&gt;");
 };
 
-// Component for rendering a single Task Card
 const TaskCard = ({ task, onTaskClick }) => {
     const categoryColor = (cat) => {
         const c = (cat || "").toLowerCase();
@@ -391,11 +113,11 @@ const TaskCard = ({ task, onTaskClick }) => {
             <div className="flex items-center gap-3">
                 {channelLogoHTML}
                 <h3 className="font-bold text-lg text-blue-700 leading-snug flex-1">
-                    {esc(task.title || "Untitled")}
+                    {esc(task.title || "শিরোনামহীন")}
                 </h3>
             </div>
             <span className={`absolute top-3 right-3 text-xs px-2 py-1 rounded-full border ${categoryColor(task.category)}`}>
-                {esc(task.category || "Uncat")}
+                {esc(task.category || "অশ্রেণীভুক্ত")}
             </span>
             {task.description && <p className="text-sm text-slate-600 mt-2">{esc(task.description)}</p>}
             <div className="flex justify-between items-center text-sm text-gray-600 font-medium mt-3 border-t pt-2">
@@ -405,7 +127,7 @@ const TaskCard = ({ task, onTaskClick }) => {
                 </div>
                 <div>
                     <i className="fas fa-user-tie text-cyan-500 mr-1"></i>
-                    আপলোড করেছেন: <span className="font-medium text-slate-800">{esc(task.uploaderName || "Unknown")}</span>
+                    আপলোড করেছেন: <span className="font-medium text-slate-800">{esc(task.uploaderName || "অজানা")}</span>
                 </div>
             </div>
             <button
@@ -418,9 +140,7 @@ const TaskCard = ({ task, onTaskClick }) => {
     );
 };
 
-// Component for rendering a single Order Card
 const OrderCard = ({ order }) => {
-    // Get status color
     let statusColorClass = 'bg-gray-400';
     if (order.status === 'pending') {
         statusColorClass = 'bg-yellow-500';
@@ -430,10 +150,8 @@ const OrderCard = ({ order }) => {
         statusColorClass = 'bg-green-500';
     }
 
-    // Get category text
     const categoryText = (order.category === 'youtube') ? 'ইউটিউব' : 'ফেসবুক';
     
-    // Get sub-category text
     const subCategoryMap = {
         'channel-subscribe': 'চ্যানেল সাবস্ক্রাইব',
         'video-view': 'ভিডিও ভিউ',
@@ -447,7 +165,6 @@ const OrderCard = ({ order }) => {
     };
     const subCategoryText = subCategoryMap[order.subCategory] || order.subCategory;
 
-    // Format timestamp
     const formatTimeAgo = (timestamp) => {
         if (!timestamp) return "এইমাত্র";
         const date = new Date(timestamp);
@@ -503,9 +220,9 @@ const OrderCard = ({ order }) => {
     );
 };
 
-
-export default function App() {
-    const [welcomeMessage, setWelcomeMessage] = useState("Your Name");
+const AppContent = () => {
+    const { db, auth, user, isAuthReady } = useAppContext();
+    const [welcomeMessage, setWelcomeMessage] = useState("আপনার নাম");
     const [userPoints, setUserPoints] = useState(0);
     const [userLoggedIn, setUserLoggedIn] = useState(false);
     const [profilePicUrl, setProfilePicUrl] = useState(DEFAULT_PROFILE_PIC_URL);
@@ -518,9 +235,6 @@ export default function App() {
     const [loadingOrders, setLoadingOrders] = useState(true);
     const [loadingPromotions, setLoadingPromotions] = useState(true);
     const [promotion, setPromotion] = useState(null);
-    const [currentPage, setCurrentPage] = useState(1);
-    const [lastLoadedKeys, setLastLoadedKeys] = useState([]);
-    const taskLimit = 20;
 
     const toggleMobileMenu = () => {
         setMobileMenuOpen(!mobileMenuOpen);
@@ -535,128 +249,62 @@ export default function App() {
         if (userLoggedIn) {
             await signOut(auth);
         } else {
-            // Redirect to login page or show login modal
-            window.location.href = 'login.html';
-        }
-    };
-    
-    // --- Data Loading Functions (moved into useEffect) ---
-
-    // Function to load all notifications for UI
-    const loadAllNotificationsForUI = async (user) => {
-        if (!user) {
-            setNotifications([]);
-            return;
-        }
-
-        try {
-            const snapshot = await get(child(ref(db), "notifications"));
-            if (!snapshot.exists()) {
-                setNotifications([]);
-                return;
-            }
-
-            const notificationsData = snapshot.val();
-            const allNotificationData = [];
-            for (const notificationId in notificationsData) {
-                const data = notificationsData[notificationId];
-                const isRead = data.readBy && data.readBy[user.uid];
-                allNotificationData.push({ id: notificationId, ...data, read: isRead });
-            }
-            allNotificationData.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-            setNotifications(allNotificationData);
-        } catch (error) {
-            console.error("Error loading notifications from Realtime Database:", error);
-            setNotifications([]);
+            // Placeholder for login action
+            alert("Login not implemented yet. Please use the initial auth token provided.");
         }
     };
 
-    // Function to load tasks
-    const loadTasks = async (startKey = null, isPrevious = false) => {
-        setLoadingTasks(true);
+    const handleMarkAsRead = async (notificationId) => {
+        if (!user || !db) return;
         try {
-            let tasksRef = ref(db, 'tasks');
-            let tasksQuery;
+            const notifRef = ref(db, `notifications/${notificationId}/readBy/${user.uid}`);
+            await set(notifRef, true);
+        } catch (e) {
+            console.error("Error marking notification as read:", e);
+        }
+    };
 
-            if (isPrevious) {
-                const lastKey = lastLoadedKeys[lastLoadedKeys.length - 2];
-                tasksQuery = query(tasksRef, orderByKey(), endBefore(lastKey), limitToLast(taskLimit));
-            } else if (startKey) {
-                tasksQuery = query(tasksRef, orderByKey(), startAfter(startKey), limitToFirst(taskLimit));
-            } else {
-                tasksQuery = query(tasksRef, orderByKey(), limitToFirst(taskLimit));
-            }
+    const handleTaskClick = (id) => {
+        alert(`Navigating to task details for task ID: ${id}`);
+    };
 
-            const snapshot = await get(tasksQuery);
-            if (!snapshot.exists()) {
-                setTasks([]);
-                setLoadingTasks(false);
-                return;
-            }
+    // Listen for user data and points updates
+    useEffect(() => {
+        if (!db || !user || !isAuthReady) return;
+        const userRef = ref(db, `users/${user.uid}`);
+        const unsubscribe = onValue(userRef, (snapshot) => {
+            const userData = snapshot.val() || {};
+            const displayName = userData.displayName || user.email || "ইউজার";
+            setWelcomeMessage(`স্বাগতম, ${displayName}`);
+            setUserPoints(userData.points || 0);
+            setProfilePicUrl(userData.profilePictureUrl || DEFAULT_PROFILE_PIC_URL);
+            setUserLoggedIn(true);
+        });
+        return () => unsubscribe();
+    }, [db, user, isAuthReady]);
 
+    // Load tasks, orders, and promotions
+    useEffect(() => {
+        if (!db || !isAuthReady) return;
+
+        // Load Tasks
+        const tasksRef = ref(db, 'tasks');
+        const unsubscribeTasks = onValue(tasksRef, (snapshot) => {
             const tasksData = snapshot.val();
-            let taskArray = Object.keys(tasksData).map(key => ({
-                id: key,
-                ...tasksData[key]
-            }));
-
-            if (isPrevious) {
-                taskArray.reverse();
-            }
-
+            const taskArray = tasksData ? Object.keys(tasksData).map(key => ({ id: key, ...tasksData[key] })) : [];
             setTasks(taskArray);
-            if (!isPrevious && taskArray.length > 0) {
-                setLastLoadedKeys([...lastLoadedKeys, taskArray[taskArray.length - 1].id]);
-            }
             setLoadingTasks(false);
-        } catch (error) {
-            console.error("Realtime Database থেকে টাস্ক লোড করতে সমস্যা:", error);
-            setTasks([]);
+        }, (error) => {
+            console.error("Error loading tasks:", error);
             setLoadingTasks(false);
-        }
-    };
+        });
 
-    // Function to load orders
-    const loadOrders = async (user) => {
-        if (!user) {
-            setOrders([]);
-            setLoadingOrders(false);
-            return;
-        }
-
-        setLoadingOrders(true);
-        try {
-            const snapshot = await get(ref(db), 'orders');
-            if (!snapshot.exists()) {
-                setOrders([]);
-                setLoadingOrders(false);
-                return;
-            }
-
-            const ordersData = snapshot.val();
-            const userOrders = Object.keys(ordersData)
-                .map(key => ({ id: key, ...ordersData[key] }))
-                .filter(order => order.userId === user.uid)
-                .sort((a, b) => b.timestamp - a.timestamp);
-
-            setOrders(userOrders);
-            setLoadingOrders(false);
-        } catch (error) {
-            console.error("অর্ডার লোড করতে সমস্যা:", error);
-            setOrders([]);
-            setLoadingOrders(false);
-        }
-    };
-
-    // Function to load promotion banner
-    const loadPromotionBanner = async () => {
-        setLoadingPromotions(true);
-        try {
-            const snapshot = await get(child(ref(db), "promotions"));
+        // Load Promotions
+        const promotionsRef = ref(db, 'promotions');
+        const unsubscribePromotions = onValue(promotionsRef, (snapshot) => {
+            const promotionsData = snapshot.val();
             let latestPromotion = null;
-
-            if (snapshot.exists()) {
-                const promotionsData = snapshot.val();
+            if (promotionsData) {
                 const activePromotions = Object.values(promotionsData).filter(p => p.active);
                 if (activePromotions.length > 0) {
                     latestPromotion = activePromotions.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))[0];
@@ -664,68 +312,101 @@ export default function App() {
             }
             setPromotion(latestPromotion);
             setLoadingPromotions(false);
-        } catch (error) {
-            console.error("প্রোমোশন ব্যানার লোড করতে সমস্যা:", error);
-            setPromotion(null);
+        }, (error) => {
+            console.error("Error loading promotions:", error);
             setLoadingPromotions(false);
-        }
-    };
-
-    // Main useEffect for data loading and auth state
-    useEffect(() => {
-        // Initial setup on mount
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                setUserLoggedIn(true);
-                // Load user data
-                const userRef = child(ref(db), `users/${user.uid}`);
-                const userSnap = await get(userRef);
-                const userData = userSnap.exists() ? userSnap.val() : {};
-
-                const displayName = userData.displayName || user.email || "ইউজার";
-                setWelcomeMessage(`স্বাগতম, ${displayName}`);
-                setUserPoints(userData.points || 0);
-                setProfilePicUrl(userData.profilePictureUrl || DEFAULT_PROFILE_PIC_URL);
-
-                // Load user-specific data
-                loadAllNotificationsForUI(user);
-                loadOrders(user);
-            } else {
-                // If user is not logged in, set state to false
-                setUserLoggedIn(false);
-                setWelcomeMessage("স্বাগতম, অতিথি");
-                setUserPoints(0);
-                setProfilePicUrl(DEFAULT_PROFILE_PIC_URL);
-                setOrders([]);
-                loadAllNotificationsForUI(null);
-            }
         });
 
-        // Load general data that doesn't depend on auth state immediately
-        loadTasks();
-        loadPromotionBanner();
+        // Load User Orders
+        let unsubscribeOrders;
+        if (user && user.uid) {
+            const ordersRef = ref(db, 'orders');
+            unsubscribeOrders = onValue(ordersRef, (snapshot) => {
+                const ordersData = snapshot.val();
+                const userOrders = ordersData ? Object.keys(ordersData).map(key => ({ id: key, ...ordersData[key] })).filter(order => order.userId === user.uid) : [];
+                setOrders(userOrders);
+                setLoadingOrders(false);
+            }, (error) => {
+                console.error("Error loading orders:", error);
+                setLoadingOrders(false);
+            });
+        } else {
+            setOrders([]);
+            setLoadingOrders(false);
+        }
+
+        // Load Notifications
+        const notificationsRef = ref(db, 'notifications');
+        const unsubscribeNotifications = onValue(notificationsRef, (snapshot) => {
+            const notificationsData = snapshot.val();
+            const allNotifications = notificationsData ? Object.keys(notificationsData).map(key => ({
+                id: key,
+                ...notificationsData[key],
+                read: notificationsData[key].readBy && user && notificationsData[key].readBy[user.uid]
+            })) : [];
+            allNotifications.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+            setNotifications(allNotifications);
+        }, (error) => {
+            console.error("Error loading notifications:", error);
+        });
 
         const closeNotifications = () => setShowNotifications(false);
         document.addEventListener('click', closeNotifications);
 
         return () => {
-            unsubscribe();
+            unsubscribeTasks();
+            unsubscribePromotions();
+            if (unsubscribeOrders) unsubscribeOrders();
+            unsubscribeNotifications();
             document.removeEventListener('click', closeNotifications);
         };
-    }, []);
+    }, [db, user, isAuthReady]);
+
 
     return (
         <div lang="bn">
-            <Head>
-                <meta charSet="utf-8" />
-                <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <title>Water Drop Theme Dashboard</title>
-                <script src="https://cdn.tailwindcss.com"></script>
-                <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css" rel="stylesheet" />
-                <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri&display=swap" rel="stylesheet" />
-                <style>{globalCss}</style>
-            </Head>
-
+            <style>
+                {`
+                body {
+                    font-family: 'Hind Siliguri', sans-serif;
+                    overflow-x: hidden;
+                }
+                .skeleton-card { background-color: #f3f4f6; overflow: hidden; position: relative; }
+                .shimmer { width: 100%; height: 100%; background: linear-gradient(to right, #f3f4f6 8%, #e5e7eb 18%, #f3f4f6 33%); background-size: 800px 104px; position: absolute; top: 0; left: -800px; animation: shimmer 1.5s infinite linear; }
+                @keyframes shimmer { 0% { left: -800px; } 100% { left: 800px; } }
+                .skeleton-line { background-color: #e5e7eb; border-radius: 4px; position: relative; overflow: hidden; }
+                .skeleton-circle { background-color: #e5e7eb; border-radius: 50%; position: relative; overflow: hidden; }
+                .header-profile-logo { width: 48px; height: 48px; border-radius: 50%; border: 2px solid #007bff; object-fit: cover; }
+                .mobile-slider-menu { position: fixed; top: 0; right: -280px; width: 280px; height: 100%; background-color: #ffffff; box-shadow: -8px 0 15px rgba(0, 0, 0, 0.15), inset 4px 0 8px rgba(255, 255, 255, 0.6); z-index: 1000; transition: right 0.35s cubic-bezier(0.4, 0, 0.2, 1); padding-top: 5rem; display: flex; flex-direction: column; border-top-left-radius: 1rem; border-bottom-left-radius: 1rem; backdrop-filter: saturate(180%) blur(12px); -webkit-backdrop-filter: saturate(180%) blur(12px); }
+                .mobile-slider-menu.active { right: 0; box-shadow: -12px 0 25px rgba(0, 0, 0, 0.25), inset 4px 0 12px rgba(255, 255, 255, 0.7); }
+                #sliderMenuContent { flex-grow: 1; padding: 1.5rem 0; display: flex; flex-direction: column; gap: 0.75rem; }
+                #sliderMenuContent .menu-item { display: flex; align-items: center; padding: 0.75rem 1.75rem; color: #4338ca; font-weight: 600; font-size: 1.125rem; border-radius: 0.75rem; transition: background-color 0.3s ease, color 0.3s ease, transform 0.2s ease; text-decoration: none; box-shadow: 0 0 0 0 transparent; user-select: none; position: relative; overflow: hidden; }
+                #sliderMenuContent .menu-item::before { content: ''; position: absolute; left: 0; top: 0; height: 100%; width: 4px; background: #4338ca; border-top-right-radius: 0.75rem; border-bottom-right-radius: 0.75rem; transform: scaleY(0); transform-origin: center; transition: transform 0.3s ease; z-index: 1; }
+                #sliderMenuContent .menu-item:hover::before, #sliderMenuContent .menu-item:focus-visible::before { transform: scaleY(1); }
+                #sliderMenuContent .menu-item:hover { background-color: #4338ca; color: #e0e7ff; transform: translateX(6px); box-shadow: 0 8px 15px rgba(67, 56, 202, 0.3); z-index: 10; outline: none; }
+                #sliderMenuContent .menu-item:focus-visible { outline: 2px solid #4338ca; outline-offset: 2px; }
+                .slider-backdrop { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.45); z-index: 999; opacity: 0; visibility: hidden; transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), visibility 0.35s cubic-bezier(0.4, 0, 0.2, 1); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
+                .slider-backdrop.active { opacity: 1; visibility: visible; }
+                #notificationDropdown::before { content: ''; position: absolute; top: -10px; right: 18px; border-width: 0 10px 10px 10px; border-color: transparent transparent white transparent; filter: drop-shadow(0 -2px 1px rgba(0,0,0,0.05)); z-index: 51; }
+                #notificationDropdown::after { content: ''; position: absolute; top: -11px; right: 343px; border-width: 0 10px 10px 10px; border-color: transparent transparent #e2e8f0 transparent; z-index: 50; }
+                @media (max-width: 639px) { #notificationDropdown::before, #notificationDropdown::after { right: 25px; } }
+                .spinner { border: 2px solid rgba(0, 0, 0, 0.1); border-left-color: #4f46e5; border-radius: 50%; width: 16px; height: 16px; animation: spin 1s linear infinite; }
+                @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                .btn-login { background-color: #22c55e; color: white; }
+                .btn-login:hover { background-color: #16a34a; }
+                .btn-login:focus { outline: none; box-shadow: 0 0 0 2px #4ade80, 0 0 0 4px rgba(34, 197, 94, 0.5); }
+                .btn-logout { background-color: #ef4444; color: white; }
+                .btn-logout:hover { background-color: #dc2626; }
+                .btn-logout:focus { outline: none; box-shadow: 0 0 0 2px #f87171, 0 0 0 4px rgba(239, 68, 68, 0.5); }
+                .promotion-card { background-color: #ffffff; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); padding: 0; display: flex; flex-direction: column; align-items: center; text-align: center; position: relative; overflow: hidden; border: 1px solid #e2e8f0; }
+                .promotion-image-wrapper { position: relative; width: 100%; padding-bottom: 56.25%; overflow: hidden; border-radius: 0.5rem; }
+                .promotion-image-wrapper img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 0.5rem; }
+                .promotion-card a.promotion-link { display: block; width: 100%; height: 100%; }
+                .sponsored-tag { position: absolute; top: 0.6rem; left: 0.6rem; background-color: rgba(255, 255, 255, 0.2); color: #ffffff; padding: 0.25rem 0.75rem; border-radius: 1rem; font-size: 0.3rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); z-index: 10; backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); border: 1px solid rgba(255, 255, 255, 0.3); }
+                .task-card { background-color: #ffffff; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); padding: 1.5rem; display: flex; flex-direction: column; align-items: center; text-align: center; position: relative; overflow: hidden; border: 1px solid #e2e8f0; transition: all 0.3s ease; }
+                .task-card:hover { transform: translateY(-0.25rem); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); }
+                `}
+            </style>
             <body className="bg-gradient-to-b from-cyan-100 to-blue-200 min-h-screen flex flex-col">
                 {/* Header Section */}
                 <header className="bg-white shadow-xl sticky top-0 z-50 border-b border-gray-200">
@@ -757,10 +438,10 @@ export default function App() {
                                         {userLoggedIn ? (
                                             <div aria-label="আপনার পয়েন্ট" className="flex items-center bg-indigo-50 text-indigo-700 font-semibold px-2 py-1 rounded-full shadow select-none text-xs scale-90">
                                                 <i className="fas fa-coins mr-1 text-yellow-400 text-sm"></i>
-                                                <span>{userPoints} Points</span>
+                                                <span>{userPoints} পয়েন্ট</span>
                                             </div>
                                         ) : (
-                                            <div aria-label="সাইন-ইন স্ট্যাটাস" onClick={() => window.location.href = 'login.html'} className="flex items-center bg-red-50 text-red-700 font-semibold px-2 py-1 rounded-full shadow select-none text-xs scale-90 cursor-pointer">
+                                            <div aria-label="সাইন-ইন স্ট্যাটাস" onClick={handleLoginLogout} className="flex items-center bg-red-50 text-red-700 font-semibold px-2 py-1 rounded-full shadow select-none text-xs scale-90 cursor-pointer">
                                                 <i className="fas fa-user-circle mr-1 text-red-500 text-sm"></i>
                                                 <span>লগইন করুন</span>
                                             </div>
@@ -785,8 +466,8 @@ export default function App() {
                                         {notifications.length > 0 ? (
                                             notifications.map(notification => (
                                                 <a key={notification.id} href={notification.link || '#'} className={`block px-4 py-2 hover:bg-gray-100 border-b border-gray-100 last:border-b-0 ${notification.read ? 'opacity-70' : 'font-semibold'}`}
-                                                   onClick={() => { /* markAsRead */ }}>
-                                                    <p className="text-sm text-gray-800">{esc(notification.title || "Untitled Notification")}</p>
+                                                   onClick={() => handleMarkAsRead(notification.id)}>
+                                                    <p className="text-sm text-gray-800">{esc(notification.title || "শিরোনামহীন নোটিফিকেশন")}</p>
                                                     {notification.message && <p className="text-xs text-gray-500 mt-1">{esc(notification.message)}</p>}
                                                 </a>
                                             ))
@@ -811,10 +492,10 @@ export default function App() {
                             <nav aria-label="প্রধান নেভিগেশন"
                                 className="hidden md:flex items-center space-x-6 lg:space-x-8 text-indigo-600 font-semibold select-none text-base"
                                 role="navigation">
-                                <a className="hover:text-indigo-800 transition" href="/dashboard">ড্যাশবোর্ড</a>
-                                <a className="hover:text-indigo-800 transition" href="/mytasklist">টাস্ক</a>
-                                <a className="hover:text-indigo-800 transition" href="/leaderboard">লিডারবোর্ড</a>
-                                <a className="hover:text-indigo-800 transition" href="/order">অর্ডার</a>
+                                <a className="hover:text-indigo-800 transition" href="#">ড্যাশবোর্ড</a>
+                                <a className="hover:text-indigo-800 transition" href="#">টাস্ক</a>
+                                <a className="hover:text-indigo-800 transition" href="#">লিডারবোর্ড</a>
+                                <a className="hover:text-indigo-800 transition" href="#">অর্ডার</a>
                             </nav>
                         </div>
                     </div>
@@ -832,12 +513,12 @@ export default function App() {
                             </div>
                         </div>
                         <div id="sliderMenuContent" role="none">
-                            <a className="menu-item" href="/dashboard" role="menuitem" tabIndex="0">ড্যাশবোর্ড</a>
-                            <a className="menu-item" href="/mytasklist" role="menuitem" tabIndex="0">আমার টাস্ক</a>
-                            <a className="menu-item" href="/completedtask" role="menuitem" tabIndex="0">সম্পূর্ণ করা টাস্ক</a>
-                            <a className="menu-item" href="/order" role="menuitem" tabIndex="0">অর্ডার করুন</a>
-                            <a className="menu-item" href="/reffer" role="menuitem" tabIndex="0">রেফার করুন</a>
-                            <a className="menu-item" href="/leaderboard" role="menuitem" tabIndex="0">লিডারবোর্ড</a>
+                            <a className="menu-item" href="#" role="menuitem" tabIndex="0">ড্যাশবোর্ড</a>
+                            <a className="menu-item" href="#" role="menuitem" tabIndex="0">আমার টাস্ক</a>
+                            <a className="menu-item" href="#" role="menuitem" tabIndex="0">সম্পূর্ণ করা টাস্ক</a>
+                            <a className="menu-item" href="#" role="menuitem" tabIndex="0">অর্ডার করুন</a>
+                            <a className="menu-item" href="#" role="menuitem" tabIndex="0">রেফার করুন</a>
+                            <a className="menu-item" href="#" role="menuitem" tabIndex="0">লিডারবোর্ড</a>
                         </div>
                         <div className="p-4 mt-auto border-t border-gray-200">
                             <button
@@ -900,41 +581,13 @@ export default function App() {
                             ))
                         ) : tasks.length > 0 ? (
                             tasks.map(task => (
-                                <TaskCard key={task.id} task={task} onTaskClick={(id) => window.location.href = `taskdetails.html?id=${id}`} />
+                                <TaskCard key={task.id} task={task} onTaskClick={handleTaskClick} />
                             ))
                         ) : (
                             <div className="col-span-full text-center text-blue-700">কোনো টাস্ক নেই।</div>
                         )}
                     </div>
-                    {/* Pagination */}
-                    <div className="flex justify-center items-center space-x-4 mt-8">
-                        <button
-                            onClick={() => {
-                                if (currentPage > 1) {
-                                    setCurrentPage(currentPage - 1);
-                                    loadTasks(lastLoadedKeys[currentPage - 2], true);
-                                }
-                            }}
-                            disabled={currentPage === 1 || loadingTasks}
-                            className="bg-blue-600 text-white font-semibold p-3 rounded-full transition-colors hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-                        >
-                            <i className="fas fa-chevron-left"></i>
-                        </button>
-                        <div className="text-lg font-semibold text-gray-700">
-                            পেজ {currentPage}
-                        </div>
-                        <button
-                            onClick={() => {
-                                setCurrentPage(currentPage + 1);
-                                loadTasks(lastLoadedKeys[lastLoadedKeys.length - 1]);
-                            }}
-                            disabled={tasks.length < taskLimit || loadingTasks}
-                            className="bg-blue-600 text-white font-semibold p-3 rounded-full transition-colors hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-                        >
-                            <i className="fas fa-chevron-right"></i>
-                        </button>
-                    </div>
-
+                    
                     <h2 className="text-3xl font-extrabold text-blue-800 mb-8 text-center mt-12">আপনার জমা করা অর্ডারসমূহ</h2>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                         {loadingOrders ? (
@@ -968,6 +621,15 @@ export default function App() {
                 </footer>
             </body>
         </div>
+    );
+};
+
+
+export default function App() {
+    return (
+        <AppProvider>
+            <AppContent />
+        </AppProvider>
     );
 }
 
