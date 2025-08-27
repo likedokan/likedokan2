@@ -1,7 +1,7 @@
 import React, { useEffect, useState, createContext, useContext } from 'react';
-import { initializeApp } from "firebase/app";
-import { getDatabase, ref, onValue, get, child } from "firebase/database";
-import { getAuth, signInAnonymously, onAuthStateChanged, signOut } from "firebase/auth";
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithCustomToken, signInAnonymously, signOut, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, where, updateDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 
 // IMPORTANT: These global variables are provided by the canvas environment.
 // DO NOT modify them.
@@ -22,14 +22,24 @@ const AppProvider = ({ children }) => {
         try {
             const firebaseConfig = JSON.parse(__firebase_config);
             const app = initializeApp(firebaseConfig);
-            const realtimeDb = getDatabase(app);
+            const firestoreDb = getFirestore(app);
             const firebaseAuth = getAuth(app);
-            setDb(realtimeDb);
+            setDb(firestoreDb);
             setAuth(firebaseAuth);
 
             const unsubscribe = onAuthStateChanged(firebaseAuth, async (currentUser) => {
                 if (currentUser) {
                     setUser(currentUser);
+                    const userRef = doc(firestoreDb, "artifacts", __app_id, "users", currentUser.uid);
+                    const userSnap = await getDoc(userRef);
+                    if (!userSnap.exists()) {
+                        await setDoc(userRef, {
+                            displayName: currentUser.displayName || "অতিথি",
+                            profilePictureUrl: currentUser.photoURL || 'https://placehold.co/300x300/a0aec0/ffffff?text=User',
+                            points: 0,
+                            createdAt: serverTimestamp(),
+                        });
+                    }
                 } else {
                     setUser(null);
                 }
@@ -167,8 +177,8 @@ const OrderCard = ({ order }) => {
 
     const formatTimeAgo = (timestamp) => {
         if (!timestamp) return "এইমাত্র";
-        const date = new Date(timestamp);
         const now = new Date();
+        const date = timestamp.toDate(); // Firestore timestamp to Date object
         const diffMs = now - date;
         const diffMinutes = Math.round(diffMs / (1000 * 60));
         const diffHours = Math.round(diffMs / (1000 * 60 * 60));
@@ -253,32 +263,25 @@ const AppContent = () => {
             alert("Login not implemented yet. Please use the initial auth token provided.");
         }
     };
-
-    const handleMarkAsRead = async (notificationId) => {
-        if (!user || !db) return;
-        try {
-            const notifRef = ref(db, `notifications/${notificationId}/readBy/${user.uid}`);
-            await set(notifRef, true);
-        } catch (e) {
-            console.error("Error marking notification as read:", e);
-        }
-    };
-
-    const handleTaskClick = (id) => {
-        alert(`Navigating to task details for task ID: ${id}`);
-    };
-
+    
     // Listen for user data and points updates
     useEffect(() => {
         if (!db || !user || !isAuthReady) return;
-        const userRef = ref(db, `users/${user.uid}`);
-        const unsubscribe = onValue(userRef, (snapshot) => {
-            const userData = snapshot.val() || {};
-            const displayName = userData.displayName || user.email || "ইউজার";
-            setWelcomeMessage(`স্বাগতম, ${displayName}`);
-            setUserPoints(userData.points || 0);
-            setProfilePicUrl(userData.profilePictureUrl || DEFAULT_PROFILE_PIC_URL);
-            setUserLoggedIn(true);
+        const userRef = doc(db, "artifacts", __app_id, "users", user.uid);
+        const unsubscribe = onSnapshot(userRef, (docSnap) => {
+            if (docSnap.exists()) {
+                const userData = docSnap.data();
+                const displayName = userData.displayName || user.email || "ইউজার";
+                setWelcomeMessage(`স্বাগতম, ${displayName}`);
+                setUserPoints(userData.points || 0);
+                setProfilePicUrl(userData.profilePictureUrl || DEFAULT_PROFILE_PIC_URL);
+                setUserLoggedIn(true);
+            } else {
+                setWelcomeMessage("স্বাগতম, অতিথি");
+                setUserPoints(0);
+                setProfilePicUrl(DEFAULT_PROFILE_PIC_URL);
+                setUserLoggedIn(false);
+            }
         });
         return () => unsubscribe();
     }, [db, user, isAuthReady]);
@@ -288,11 +291,10 @@ const AppContent = () => {
         if (!db || !isAuthReady) return;
 
         // Load Tasks
-        const tasksRef = ref(db, 'tasks');
-        const unsubscribeTasks = onValue(tasksRef, (snapshot) => {
-            const tasksData = snapshot.val();
-            const taskArray = tasksData ? Object.keys(tasksData).map(key => ({ id: key, ...tasksData[key] })) : [];
-            setTasks(taskArray);
+        const tasksQuery = query(collection(db, "artifacts", __app_id, "public", "data", "tasks"));
+        const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
+            const taskList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setTasks(taskList);
             setLoadingTasks(false);
         }, (error) => {
             console.error("Error loading tasks:", error);
@@ -300,15 +302,14 @@ const AppContent = () => {
         });
 
         // Load Promotions
-        const promotionsRef = ref(db, 'promotions');
-        const unsubscribePromotions = onValue(promotionsRef, (snapshot) => {
-            const promotionsData = snapshot.val();
+        const promotionsQuery = query(collection(db, "artifacts", __app_id, "public", "data", "promotions"), where("active", "==", true));
+        const unsubscribePromotions = onSnapshot(promotionsQuery, (snapshot) => {
+            const promotionsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             let latestPromotion = null;
-            if (promotionsData) {
-                const activePromotions = Object.values(promotionsData).filter(p => p.active);
-                if (activePromotions.length > 0) {
-                    latestPromotion = activePromotions.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))[0];
-                }
+            if (promotionsData.length > 0) {
+                latestPromotion = promotionsData.reduce((prev, curr) => 
+                    (prev.createdAt?.toDate() || 0) > (curr.createdAt?.toDate() || 0) ? prev : curr
+                );
             }
             setPromotion(latestPromotion);
             setLoadingPromotions(false);
@@ -320,11 +321,10 @@ const AppContent = () => {
         // Load User Orders
         let unsubscribeOrders;
         if (user && user.uid) {
-            const ordersRef = ref(db, 'orders');
-            unsubscribeOrders = onValue(ordersRef, (snapshot) => {
-                const ordersData = snapshot.val();
-                const userOrders = ordersData ? Object.keys(ordersData).map(key => ({ id: key, ...ordersData[key] })).filter(order => order.userId === user.uid) : [];
-                setOrders(userOrders);
+            const ordersQuery = query(collection(db, "artifacts", __app_id, "users", user.uid, "orders"));
+            unsubscribeOrders = onSnapshot(ordersQuery, (snapshot) => {
+                const ordersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setOrders(ordersList);
                 setLoadingOrders(false);
             }, (error) => {
                 console.error("Error loading orders:", error);
@@ -336,15 +336,14 @@ const AppContent = () => {
         }
 
         // Load Notifications
-        const notificationsRef = ref(db, 'notifications');
-        const unsubscribeNotifications = onValue(notificationsRef, (snapshot) => {
-            const notificationsData = snapshot.val();
-            const allNotifications = notificationsData ? Object.keys(notificationsData).map(key => ({
-                id: key,
-                ...notificationsData[key],
-                read: notificationsData[key].readBy && user && notificationsData[key].readBy[user.uid]
-            })) : [];
-            allNotifications.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        const notificationsRef = collection(db, "artifacts", __app_id, "public", "data", "notifications");
+        const unsubscribeNotifications = onSnapshot(notificationsRef, (snapshot) => {
+            const allNotifications = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data(),
+                read: doc.data().readBy && user && doc.data().readBy[user.uid]
+            }));
+            allNotifications.sort((a, b) => (b.timestamp?.toDate() || 0) - (a.timestamp?.toDate() || 0));
             setNotifications(allNotifications);
         }, (error) => {
             console.error("Error loading notifications:", error);
@@ -352,7 +351,7 @@ const AppContent = () => {
 
         const closeNotifications = () => setShowNotifications(false);
         document.addEventListener('click', closeNotifications);
-
+        
         return () => {
             unsubscribeTasks();
             unsubscribePromotions();
@@ -362,6 +361,21 @@ const AppContent = () => {
         };
     }, [db, user, isAuthReady]);
 
+    const handleMarkAsRead = async (notificationId) => {
+        if (!user || !db) return;
+        try {
+            const notifRef = doc(db, "artifacts", __app_id, "public", "data", "notifications", notificationId);
+            await updateDoc(notifRef, {
+                [`readBy.${user.uid}`]: true
+            });
+        } catch (e) {
+            console.error("Error marking notification as read:", e);
+        }
+    };
+
+    const handleTaskClick = (id) => {
+        alert(`Navigating to task details for task ID: ${id}`);
+    };
 
     return (
         <div lang="bn">
@@ -632,4 +646,5 @@ export default function App() {
         </AppProvider>
     );
 }
+
 
